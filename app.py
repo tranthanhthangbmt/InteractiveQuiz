@@ -45,12 +45,12 @@ else:
     
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("我是老师 (Teacher)", use_container_width=True):
+        if st.button("👨‍🏫 Giảng viên", use_container_width=True):
             st.query_params["role"] = "teacher"
             st.rerun()
             
     with col2:
-        if st.button("我是学生 (Student)", use_container_width=True):
+        if st.button("🎓 Sinh viên", use_container_width=True):
             st.query_params["role"] = "student"
             st.rerun()
             
