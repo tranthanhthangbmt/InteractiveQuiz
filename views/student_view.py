@@ -6,8 +6,17 @@ def get_cookie_manager():
     return stx.CookieManager()
 
 def student_view(db):
-    st_autorefresh(interval=3000, key="student_refresh")
+    st_autorefresh(interval=5000, key="student_refresh") # Increased to 5s
     
+    # Caching Helpers
+    @st.cache_data(ttl=2)
+    def cached_get_response_counts(q_id):
+        return db.get_response_counts(q_id)
+        
+    @st.cache_data(ttl=5)
+    def cached_get_leaderboard(limit=10):
+        return db.get_leaderboard(limit)
+
     st.header("🎓 Student Portal")
     
     cookie_manager = get_cookie_manager()
@@ -62,6 +71,9 @@ def student_view(db):
     if is_active:
         st.subheader(f"❓ Question {current_q_id}")
         
+        # Check if voted
+        has_voted = st.session_state.get("last_voted_q") == current_q_id
+
         # Timer Logic
         import time
         from datetime import datetime
@@ -71,21 +83,22 @@ def student_view(db):
         
         if room_state.get('start_time'):
             start_dt = datetime.fromisoformat(room_state['start_time'])
-            # Ensure timezones match or use naive (assuming same server for prototype)
             elapsed = (datetime.now() - start_dt).total_seconds()
             remaining_time = max(0, room_state['duration_seconds'] - elapsed)
             
-            st.metric("⏳ Time Left", f"{int(remaining_time)}s")
-            st.progress(min(1.0, max(0.0, remaining_time / room_state['duration_seconds'])))
+            # ONLY show timer if user hasn't voted yet
+            if not has_voted:
+                st.metric("⏳ Time Left", f"{int(remaining_time)}s")
+                st.progress(min(1.0, max(0.0, remaining_time / room_state['duration_seconds'])))
             
             if remaining_time == 0:
                 is_expired = True
-                st.error("⏰ TIME'S UP!")
-        
-        if st.session_state["last_voted_q"] == current_q_id:
-            st.info("✅ Answer submitted. Waiting for results...")
-            st.write("Hang tight!")
+
+        if has_voted:
+            st.success("✅ Answer submitted!")
+            st.info("Waiting for results...")
         elif is_expired:
+            st.error("⏰ TIME'S UP!")
             st.warning("⛔ You can no longer vote for this question.")
         else:
             st.write("Choose your answer:")
@@ -161,7 +174,12 @@ def student_view(db):
              user_ans = db.get_user_response(prev_q_id, username)
              
              if user_ans == room_state["correct_answer"]:
-                 st.balloons()
+                 # Check if we already celebrated this specific question
+                 celebration_key = f"celebrated_q{current_q_id}"
+                 if celebration_key not in st.session_state:
+                     st.balloons()
+                     st.session_state[celebration_key] = True
+                 
                  st.success(f"🎉 CORRECT! You chose **{user_ans}**")
              elif user_ans:
                  st.error(f"❌ Incorrect. You chose **{user_ans}**, but the answer was **{room_state['correct_answer']}**.")
@@ -176,7 +194,7 @@ def student_view(db):
              
              # 1. Poll Results (Bar Chart)
              st.subheader("📊 Class Results")
-             data = db.get_response_counts(prev_q_id)
+             data = cached_get_response_counts(prev_q_id)
              if not data.empty:
                  total_votes = data['count'].sum()
                  if total_votes > 0:
@@ -203,7 +221,7 @@ def student_view(db):
              # 2. Leaderboard & Position
              st.subheader("🥇 Leaderboard")
              # Fetch more users to find rank
-             leaderboard_df = db.get_leaderboard(limit=100) 
+             leaderboard_df = cached_get_leaderboard(limit=100) 
              
              if not leaderboard_df.empty:
                  # Calculate Rank

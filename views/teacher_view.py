@@ -3,11 +3,20 @@ import altair as alt
 from streamlit_autorefresh import st_autorefresh
 
 def teacher_view(db):
-    st_autorefresh(interval=2000, key="teacher_refresh")
+    st_autorefresh(interval=5000, key="teacher_refresh") # Increased to 5s
 
     st.title("👨‍🏫 Teacher Dashboard")
+    
+    # Caching Helpers to reduce DB load
+    @st.cache_data(ttl=2)
+    def cached_get_response_counts(q_id):
+        return db.get_response_counts(q_id)
 
-    # Get current state
+    @st.cache_data(ttl=5)
+    def cached_get_leaderboard():
+         return db.get_leaderboard()
+
+    # Get current state (Not cached, need instant status)
     room_state = db.get_room_state()
     current_q_id = room_state['current_question_id']
     is_active = room_state['is_active']
@@ -42,44 +51,19 @@ def teacher_view(db):
         duration = st.number_input("Time Limit (seconds)", min_value=10, value=60, step=10, disabled=is_active)
         
         # Actions
-        if not is_active:
-            if st.button("🚀 START VOTING", type="primary", use_container_width=True):
-                from datetime import datetime
-                import pytz
-                # Storing naive timestamp for simplicity or UTC
-                now_iso = datetime.now().isoformat()
-                db.update_room_state(is_active=True, start_time=now_iso, duration_seconds=duration)
-                st.rerun()
-        else:
-            st.button("Voting acts...", disabled=True, use_container_width=True)
+        # Actions
+        if st.button("🚀 START VOTING", type="primary", disabled=is_active, use_container_width=True):
+            from datetime import datetime
+            
+            # Storing naive timestamp for simplicity or UTC
+            now_iso = datetime.now().isoformat()
+            db.update_room_state(is_active=True, start_time=now_iso, duration_seconds=duration)
+            st.rerun()
 
         st.write("---")
         st.subheader("Close & Revealing Answer")
-
-        # Custom CSS for Big Colorful Buttons
-        st.markdown("""
-        <style>
-        div.stButton > button {
-            width: 100%;
-            height: 80px;
-            font-size: 24px;
-            font-weight: bold;
-            color: white;
-            border: none;
-        }
-        /* Target buttons by approximate index if key is not stable, or simpler: just colors */
-        /* Since we can't easily target specific buttons by key in pure CSS without stable IDs, 
-           we rely on the order or wrap them. 
-           However, Streamlit creates unique IDs. 
-           Let's use a simpler approach: 4 columns, closely packed. */
         
-        [data-testid="column"] {
-            padding: 0px !important;
-        }
-        </style>
-        """, unsafe_allow_html=True)
-
-        cols = st.columns(4, gap="small")
+        cols = st.columns(4) # Removed gap="small" to handle spacing via CSS if needed, or keep standard
         
         # A - Red
         with cols[0]:
@@ -131,19 +115,28 @@ def teacher_view(db):
         div.stButton > button:active {
             transform: scale(0.98);
         }
+        
+        /* Disabled State */
+        div.stButton > button:disabled {
+            background-color: #E0E0E0 !important;
+            color: #9E9E9E !important;
+            border-color: #BDBDBD !important;
+            cursor: not-allowed;
+            box-shadow: none;
+        }
 
-        /* Target ONLY rows with 4 columns (The Answer Buttons) */
+        /* Target ONLY rows with 4 columns (The Answer Buttons) when NOT disabled */
         /* Re-introducing :has() to ensure we don't color the navigation buttons */
-        [data-testid="stHorizontalBlock"]:has([data-testid="column"]:nth-child(4)) [data-testid="column"]:nth-child(1) div.stButton > button {
+        [data-testid="stHorizontalBlock"]:has([data-testid="column"]:nth-child(4)) [data-testid="column"]:nth-child(1) div.stButton > button:not(:disabled) {
             background-color: #4CAF50 !important; /* Green */
         }
-        [data-testid="stHorizontalBlock"]:has([data-testid="column"]:nth-child(4)) [data-testid="column"]:nth-child(2) div.stButton > button {
+        [data-testid="stHorizontalBlock"]:has([data-testid="column"]:nth-child(4)) [data-testid="column"]:nth-child(2) div.stButton > button:not(:disabled) {
              background-color: #FF9800 !important; /* Orange */
         }
-        [data-testid="stHorizontalBlock"]:has([data-testid="column"]:nth-child(4)) [data-testid="column"]:nth-child(3) div.stButton > button {
+        [data-testid="stHorizontalBlock"]:has([data-testid="column"]:nth-child(4)) [data-testid="column"]:nth-child(3) div.stButton > button:not(:disabled) {
              background-color: #FFC107 !important; /* Yellow */
         }
-        [data-testid="stHorizontalBlock"]:has([data-testid="column"]:nth-child(4)) [data-testid="column"]:nth-child(4) div.stButton > button {
+        [data-testid="stHorizontalBlock"]:has([data-testid="column"]:nth-child(4)) [data-testid="column"]:nth-child(4) div.stButton > button:not(:disabled) {
              background-color: #2196F3 !important; /* Blue */
         }
         
@@ -201,7 +194,7 @@ def teacher_view(db):
                  st.markdown(f"<h1 style='text-align: center; font-size: 80px; color: gray;'>TIME'S UP</h1>", unsafe_allow_html=True)
             
             # Live Chart
-            data = db.get_response_counts(current_q_id)
+            data = cached_get_response_counts(current_q_id)
             
             chart = alt.Chart(data).mark_bar().encode(
                 x=alt.X('selected_option', title='Option'),
@@ -227,7 +220,7 @@ def teacher_view(db):
                 st.write(f"### Previous Result (Q{prev_q_id}): **{room_state['correct_answer']}**")
                 
                 # Show Chart for Previous Question
-                data = db.get_response_counts(prev_q_id)
+                data = cached_get_response_counts(prev_q_id)
                 
                 # Highlight logic: Keep colors but maybe dim incorrect ones? 
                 # Or just show the colors as is, and user knows which is correct.
@@ -246,7 +239,7 @@ def teacher_view(db):
             
             # Leaderboard
             st.subheader("🏆 Leaderboard")
-            leaderboard = db.get_leaderboard()
+            leaderboard = cached_get_leaderboard()
             st.dataframe(leaderboard, use_container_width=True)
 
 def finish_question(db, q_id, answer):

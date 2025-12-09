@@ -8,10 +8,16 @@ class QuizDatabase:
         self._init_db()
 
     def _get_conn(self):
-        return sqlite3.connect(self.db_path, check_same_thread=False)
+        # Increased timeout to 30s to wait for locks instead of failing immediately
+        return sqlite3.connect(self.db_path, check_same_thread=False, timeout=30.0)
 
     def _init_db(self):
         with self._get_conn() as conn:
+            # Enable Write-Ahead Logging (WAL) for better concurrency
+            conn.execute("PRAGMA journal_mode=WAL;")
+            # Relax synchronization for speed (safe for non-critical crashes)
+            conn.execute("PRAGMA synchronous=NORMAL;")
+            
             cursor = conn.cursor()
             
             # Room State
@@ -130,17 +136,32 @@ class QuizDatabase:
 
     # --- Response Methods ---
     def submit_response(self, question_id, username, selected_option):
-        try:
-            with self._get_conn() as conn:
-                conn.execute("""
-                    INSERT OR REPLACE INTO responses (question_id, username, selected_option)
-                    VALUES (?, ?, ?)
-                """, (question_id, username, selected_option))
-                conn.commit()
-            return True
-        except Exception as e:
-            print(f"Error submitting response: {e}")
-            return False
+        # Retry logic for handling high concurrency locks
+        import time
+        import random
+        max_retries = 5
+        
+        for attempt in range(max_retries):
+            try:
+                with self._get_conn() as conn:
+                    conn.execute("""
+                        INSERT OR REPLACE INTO responses (question_id, username, selected_option)
+                        VALUES (?, ?, ?)
+                    """, (question_id, username, selected_option))
+                    conn.commit()
+                return True
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e).lower():
+                    if attempt < max_retries - 1:
+                        sleep_time = 0.1 * (2 ** attempt) + random.uniform(0, 0.1)
+                        time.sleep(sleep_time)
+                        continue
+                print(f"Error submitting response (Attempt {attempt}): {e}")
+                return False
+            except Exception as e:
+                print(f"Critical error submitting response: {e}")
+                return False
+        return False
 
     def get_response_counts(self, question_id):
         with self._get_conn() as conn:
